@@ -1,7 +1,6 @@
 import os
 
-from gym.spaces import Box, Discrete, Tuple
-from mbbl.env.env_util import box
+from gymnasium.spaces import Box, Discrete, Tuple
 
 ENV_ASSET_DIR = os.path.join(os.path.dirname(__file__), 'assets')
 
@@ -11,15 +10,13 @@ def get_asset_full_path(file_name):
 
 
 def get_dim(space):
-    if isinstance(space, Box):
-        return space.low.size
-    elif isinstance(space, Discrete):
+    if isinstance(space, Discrete):
         return space.n
     elif isinstance(space, Tuple):
         return sum(get_dim(subspace) for subspace in space.spaces)
     elif hasattr(space, 'flat_dim'):
         return space.flat_dim
-    elif isinstance(space, box):
+    elif isinstance(space,Box):
         return space.low.size
     else:
         raise TypeError("Unknown space: {}".format(space))

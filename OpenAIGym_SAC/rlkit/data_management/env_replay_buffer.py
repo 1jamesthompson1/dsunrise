@@ -1,4 +1,4 @@
-from gym.spaces import Discrete
+from gymnasium.spaces import Discrete
 
 from rlkit.data_management.simple_replay_buffer import SimpleReplayBuffer, EnsembleSimpleReplayBuffer
 from rlkit.data_management.simple_replay_buffer import RandomReplayBuffer, GaussianReplayBuffer

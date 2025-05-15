@@ -10,7 +10,6 @@ import os
 import os.path as osp
 import sys
 import datetime
-import dateutil.tz
 import csv
 import json
 import pickle
@@ -160,7 +159,7 @@ class Logger(object):
         if with_prefix:
             out = self._prefix_str + out
         if with_timestamp:
-            now = datetime.datetime.now(dateutil.tz.tzlocal())
+            now = datetime.datetime.now().astimezone()
             timestamp = now.strftime('%Y-%m-%d %H:%M:%S.%f %Z')
             out = "%s | %s" % (timestamp, out)
         if not self._log_tabular_only:

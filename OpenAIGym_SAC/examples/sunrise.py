@@ -1,3 +1,9 @@
+import sys
+from pathlib import Path
+
+# Add the parent directory of 'examples' (i.e., OpenAIGym_SAC) to sys.path
+sys.path.append(str(Path(__file__).resolve().parent.parent))
+
 import argparse
 import rlkit.torch.pytorch_util as ptu
 
@@ -10,6 +16,8 @@ from rlkit.torch.sac.neurips20_sac_ensemble import NeurIPS20SACEnsembleTrainer
 from rlkit.torch.networks import FlattenMlp
 from rlkit.torch.torch_rl_algorithm import TorchBatchRLAlgorithm
 
+import gymnasium as gym
+
 def parse_args():
     parser = argparse.ArgumentParser()
     # architecture
@@ -18,12 +26,13 @@ def parse_args():
     # train
     parser.add_argument('--batch_size', default=256, type=int)
     parser.add_argument('--save_freq', default=0, type=int)
+    parser.add_argument('--computation_device', default='cpu', type=str)
 
     # misc
     parser.add_argument('--seed', default=1, type=int)
     
     # env
-    parser.add_argument('--env', default="halfcheetah_poplin", type=str)
+    parser.add_argument('--env', default="Ant-v5", type=str)
     
     # ensemble
     parser.add_argument('--num_ensemble', default=3, type=int)
@@ -38,19 +47,12 @@ def parse_args():
     args = parser.parse_args()
     return args
 
-def get_env(env_name, seed):
-
-    if env_name in ['gym_walker2d', 'gym_hopper',
-                    'gym_cheetah', 'gym_ant']:
-        from mbbl.env.gym_env.walker import env
-    env = env(env_name=env_name, rand_seed=seed, misc_info={'reset_type': 'gym'})
-    return env
 
 def experiment(variant):
-    expl_env = NormalizedBoxEnv(get_env(variant['env'], variant['seed']))
-    eval_env = NormalizedBoxEnv(get_env(variant['env'], variant['seed']))
-    obs_dim = expl_env.observation_space.low.size
-    action_dim = eval_env.action_space.low.size
+    expl_env = NormalizedBoxEnv(gym.make(variant['env']))
+    eval_env = NormalizedBoxEnv(gym.make(variant['env']))
+    obs_dim = expl_env.observation_space.shape[0]
+    action_dim = eval_env.action_space.shape[0]
     
     M = variant['layer_size']
     num_layer = variant['num_layer']
@@ -193,5 +195,8 @@ if __name__ == "__main__":
     log_dir = setup_logger_custom(exp_name, variant=variant)
             
     variant['log_dir'] = log_dir
-    ptu.set_gpu_mode(True)
+    if 'cuda' in args.computation_device:
+        ptu.set_gpu_mode(True, gpu_id=args.computation_device[0])
+    else:
+        ptu.set_gpu_mode(False)
     experiment(variant)

@@ -185,7 +185,7 @@ def ensemble_rollout(
     agent_infos = []
     env_infos = []
     masks = [] # mask for bootstrapping
-    o = env.reset()
+    o, _ = env.reset()
     en_index = np.random.randint(num_ensemble)
     agent[en_index].reset()
     next_o = None
@@ -194,7 +194,8 @@ def ensemble_rollout(
         env.render(**render_kwargs)
     while path_length < max_path_length:
         a, agent_info = agent[en_index].get_action(o)
-        next_o, r, d, env_info = env.step(a)
+        next_o, r, term, trun, env_info = env.step(a)
+        d = term or trun
         if noise_flag == 1:
             r += np.random.normal(0,1,1)[0]
         observations.append(o)
@@ -347,7 +348,8 @@ def ensemble_ucb_rollout(
                     a_max = _a
                     agent_info_max = agent_info
 
-        next_o, r, d, env_info = env.step(a_max)
+        next_o, r, trunc, term, env_info = env.step(a_max)
+        d = term or trunc
         if noise_flag == 1:
             r += np.random.normal(0,1,1)[0]
         observations.append(o)
@@ -427,7 +429,7 @@ def ensemble_eval_rollout(
     terminals = []
     agent_infos = []
     env_infos = []
-    o = env.reset()
+    o, _ = env.reset()
     for en_index in range(num_ensemble):
         agent[en_index].reset()
     next_o = None
@@ -443,7 +445,8 @@ def ensemble_eval_rollout(
             else:
                 a += _a
         a = a / num_ensemble
-        next_o, r, d, env_info = env.step(a)
+        next_o, r, trunc, term, env_info = env.step(a)
+        d = term or trunc
         observations.append(o)
         rewards.append(r)
         terminals.append(d)

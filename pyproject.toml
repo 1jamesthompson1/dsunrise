@@ -1,0 +1,22 @@
+[project]
+name = "sunrise"
+version = "0.1.0"
+description = "Authors implementation updated to modern standards"
+authors = [
+    {name = "James",email = "1jamesthompson1@gmail.com"}
+]
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = [
+    "numpy (>=2.2.5,<3.0.0)",
+    "torch (>=2.7.0,<3.0.0)",
+    "torchvision (>=0.22.0,<0.23.0)",
+    "torchaudio (>=2.7.0,<3.0.0)",
+    "gymnasium[mujoco] (>=1.1.1,<2.0.0)",
+    "gtimer (>=1.0.0b5,<2.0.0)",
+]
+
+
+[build-system]
+requires = ["poetry-core>=2.0.0,<3.0.0"]
+build-backend = "poetry.core.masonry.api"
