@@ -27,9 +27,11 @@ def parse_args():
     parser.add_argument('--batch_size', default=256, type=int)
     parser.add_argument('--save_freq', default=0, type=int)
     parser.add_argument('--computation_device', default='cpu', type=str)
+    parser.add_argument('--epochs', default=210, type=int)
 
     # misc
     parser.add_argument('--seed', default=1, type=int)
+    parser.add_argument('--log_dir', default='data', type=str)
     
     # env
     parser.add_argument('--env', default="Ant-v5", type=str)
@@ -162,7 +164,7 @@ if __name__ == "__main__":
         layer_size=256,
         replay_buffer_size=int(1E6),
         algorithm_kwargs=dict(
-            num_epochs=210,
+            num_epochs=args.epochs,
             num_eval_steps_per_epoch=1000,
             num_trains_per_train_loop=1000,
             num_expl_steps_per_train_loop=1000,
@@ -187,13 +189,12 @@ if __name__ == "__main__":
         env=args.env,
         inference_type=args.inference_type,
         temperature=args.temperature,
-        log_dir="",
     )
                             
     set_seed(args.seed)
     exp_name = 'SUNRISE'
-    log_dir = setup_logger_custom(exp_name, variant=variant)
-            
+    log_dir = setup_logger_custom(exp_name, log_dir=args.log_dir, variant=variant)
+
     variant['log_dir'] = log_dir
     if 'cuda' in args.computation_device:
         ptu.set_gpu_mode(True, gpu_id=args.computation_device[0])
