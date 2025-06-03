@@ -323,7 +323,7 @@ def ensemble_ucb_rollout(
     agent_infos = []
     env_infos = []
     masks = [] # mask for bootstrapping
-    o = env.reset()
+    o, _ = env.reset()
     for en_index in range(num_ensemble):
         agent[en_index].reset()
     next_o = None

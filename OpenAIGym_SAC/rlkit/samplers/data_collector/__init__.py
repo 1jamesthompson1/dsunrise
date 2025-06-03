@@ -6,4 +6,5 @@ from rlkit.samplers.data_collector.base import (
 from rlkit.samplers.data_collector.path_collector import (
     MdpPathCollector,
     EnsembleMdpPathCollector,
+    DynamicEnsembleMdpPathCollector,
 )

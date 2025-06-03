@@ -98,6 +98,40 @@ class EnsembleEnvReplayBuffer(EnsembleSimpleReplayBuffer):
             mask=mask,
             **kwargs
         )
+
+class DynamicEnsembleEnvReplayBuffer(EnsembleEnvReplayBuffer):
+    def __init__(
+            self,
+            max_replay_buffer_size,
+            env,
+            num_ensemble,
+            log_dir,
+            env_info_sizes=None
+    ):
+        """
+        :param max_replay_buffer_size:
+        :param env:
+        """
+        super().__init__(
+            max_replay_buffer_size=max_replay_buffer_size,
+            env=env,
+            num_ensemble=num_ensemble,
+            log_dir=log_dir,
+            env_info_sizes=env_info_sizes
+        )
+
+    def update_mask(self, actor, mask):
+        """
+        Update the mask for a particular action. I.e just update a column
+        """
+        self._mask[:, actor] = mask
+    
+    def remove_actor(self, actor):
+        """
+        Remove a actor from the mask. I.e remove the column from the mask
+        """
+        self._mask = np.delete(self._mask, actor, axis=1)
+
     
 class RandomEnvReplayBuffer(RandomReplayBuffer):
     def __init__(

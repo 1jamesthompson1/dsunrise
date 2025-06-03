@@ -1,0 +1,226 @@
+import sys
+from pathlib import Path
+import torch
+
+# Add the parent directory of 'examples' (i.e., OpenAIGym_SAC) to sys.path
+sys.path.append(str(Path(__file__).resolve().parent.parent))
+
+import argparse
+import rlkit.torch.pytorch_util as ptu
+
+from rlkit.data_management.env_replay_buffer import DynamicEnsembleEnvReplayBuffer
+from rlkit.envs.wrappers import NormalizedBoxEnv
+from rlkit.launchers.launcher_util import setup_logger_custom, set_seed
+from rlkit.samplers.data_collector import DynamicEnsembleMdpPathCollector
+from rlkit.torch.sac.policies import TanhGaussianPolicy, MakeDeterministic
+from rlkit.torch.sac.dsunrise import DSunriseTrainer
+from rlkit.torch.networks import FlattenMlp
+from rlkit.torch.torch_rl_algorithm import TorchBatchRLAlgorithm
+
+import gymnasium as gym
+
+def parse_args():
+    parser = argparse.ArgumentParser()
+    # architecture
+    parser.add_argument('--num_layer', default=2, type=int)
+    
+    # train
+    parser.add_argument('--batch_size', default=256, type=int)
+    parser.add_argument('--save_freq', default=0, type=int)
+    parser.add_argument('--computation_device', default='cpu', type=str)
+    parser.add_argument('--epochs', default=210, type=int)
+
+    # misc
+    parser.add_argument('--seed', default=1, type=int)
+    parser.add_argument('--exp-dir', default='data', type=str)
+    parser.add_argument('--exp-name', default='experiment', type=str)
+    parser.add_argument('--max-cpu', default=4, type=int)
+
+    # env
+    parser.add_argument('--env', default="Ant-v5", type=str)
+    
+    # ensemble
+    parser.add_argument('--num_ensemble', default=3, type=int)
+    parser.add_argument('--ber_mean', default=0.5, type=float)
+    
+    # inference
+    parser.add_argument('--inference_type', default=0.0, type=float)
+    
+    # corrective feedback
+    parser.add_argument('--temperature', default=20.0, type=float)
+    
+    args = parser.parse_args()
+    return args
+    
+
+
+class Ensemble:
+    def __init__(self, starting_size, obs_dim, action_dim, network_structure):
+
+        self.L_qf1, self.L_qf2, self.L_target_qf1, self.L_target_qf2, self.L_policy, self.L_eval_policy = [], [], [], [], [], []
+
+        for _ in range(starting_size):
+
+            qf1 = FlattenMlp(
+                input_size=obs_dim + action_dim,
+                output_size=1,
+                hidden_sizes=network_structure,
+            )
+            qf2 = FlattenMlp(
+                input_size=obs_dim + action_dim,
+                output_size=1,
+                hidden_sizes=network_structure,
+            )
+            target_qf1 = FlattenMlp(
+                input_size=obs_dim + action_dim,
+                output_size=1,
+                hidden_sizes=network_structure,
+            )
+            target_qf2 = FlattenMlp(
+                input_size=obs_dim + action_dim,
+                output_size=1,
+                hidden_sizes=network_structure,
+            )
+            policy = TanhGaussianPolicy(
+                obs_dim=obs_dim,
+                action_dim=action_dim,
+                hidden_sizes=network_structure,
+            )
+            eval_policy = MakeDeterministic(policy)
+            
+            self.L_qf1.append(qf1)
+            self.L_qf2.append(qf2)
+            self.L_target_qf1.append(target_qf1)
+            self.L_target_qf2.append(target_qf2)
+            self.L_policy.append(policy)
+            self.L_eval_policy.append(eval_policy)
+
+    def __len__(self):
+        return len(self.L_qf1)
+
+    def get_policies(self):
+        return self.L_policy
+
+    def get_eval_policies(self):
+        return self.L_eval_policy
+    
+    def get_critic1s(self):
+        return self.L_qf1
+    
+    def get_critic2s(self):
+        return self.L_qf2
+
+    def get_target_critic1s(self):
+        return self.L_target_qf1
+    def get_target_critic2s(self):
+        return self.L_target_qf2
+
+    
+
+
+def experiment(variant):
+    expl_env = NormalizedBoxEnv(gym.make(variant['env']))
+    eval_env = NormalizedBoxEnv(gym.make(variant['env']))
+    obs_dim = expl_env.observation_space.shape[0]
+    action_dim = eval_env.action_space.shape[0]
+    
+    M = variant['layer_size']
+    num_layer = variant['num_layer']
+    network_structure = [M] * num_layer
+    
+    ensemble = Ensemble(variant['num_ensemble'], obs_dim, action_dim, network_structure)
+    
+    eval_path_collector = DynamicEnsembleMdpPathCollector(
+        eval_env,
+        ensemble,
+        eval_flag=True,
+    )
+    
+    expl_path_collector = DynamicEnsembleMdpPathCollector(
+        expl_env,
+        ensemble,
+        ber_mean=variant['ber_mean'],
+        eval_flag=False,
+        inference_type=variant['inference_type'],
+        feedback_type=1,
+    )
+    
+    replay_buffer = DynamicEnsembleEnvReplayBuffer(
+        variant['replay_buffer_size'],
+        expl_env,
+        len(ensemble),
+        log_dir=variant['log_dir'],
+    )
+    
+    trainer = DSunriseTrainer(
+        env=eval_env,
+        ensemble=ensemble,
+        feedback_type=1,
+        temperature=variant['temperature'],
+        temperature_act=0,
+        expl_gamma=0,
+        log_dir=variant['log_dir'],
+        **variant['trainer_kwargs']
+    )
+    algorithm = TorchBatchRLAlgorithm(
+        trainer=trainer,
+        exploration_env=expl_env,
+        evaluation_env=eval_env,
+        exploration_data_collector=expl_path_collector,
+        evaluation_data_collector=eval_path_collector,
+        replay_buffer=replay_buffer,
+        **variant['algorithm_kwargs']
+    )
+    
+    algorithm.to(ptu.device)
+    algorithm.train()
+
+
+if __name__ == "__main__":
+    args = parse_args()
+    
+    # noinspection PyTypeChecker
+    variant = dict(
+        algorithm="SAC",
+        version="normal",
+        layer_size=256,
+        replay_buffer_size=int(1E6),
+        algorithm_kwargs=dict(
+            num_epochs=args.epochs,
+            num_eval_steps_per_epoch=1000,
+            num_trains_per_train_loop=1000,
+            num_expl_steps_per_train_loop=1000,
+            min_num_steps_before_training=1000,
+            max_path_length=1000,
+            batch_size=args.batch_size,
+            save_frequency=args.save_freq,
+        ),
+        trainer_kwargs=dict(
+            discount=0.99,
+            soft_target_tau=5e-3,
+            target_update_period=1,
+            policy_lr=3E-4,
+            qf_lr=3E-4,
+            reward_scale=1,
+            use_automatic_entropy_tuning=True,
+        ),
+        num_ensemble=args.num_ensemble,
+        num_layer=args.num_layer,
+        seed=args.seed,
+        ber_mean=args.ber_mean,
+        env=args.env,
+        inference_type=args.inference_type,
+        temperature=args.temperature,
+    )
+
+    torch.set_num_threads(args.max_cpu)
+
+    set_seed(args.seed)
+    log_dir = setup_logger_custom(args.exp_name, log_dir=args.exp_dir, variant=variant)
+
+    variant['log_dir'] = log_dir
+    if 'cuda' in args.computation_device:
+        ptu.set_gpu_mode(True, gpu_id=args.computation_device[0])
+    else:
+        ptu.set_gpu_mode(False)
+    experiment(variant)

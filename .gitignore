@@ -103,3 +103,5 @@ MANIFEST
 *.egg-info
 \.idea/
 OpenAIGym_SAC/data/
+
+experiments
