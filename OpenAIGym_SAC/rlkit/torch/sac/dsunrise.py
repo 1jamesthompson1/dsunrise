@@ -70,8 +70,8 @@ class DSunriseTrainer(TorchTrainer):
         self.plotter = plotter
         self.render_eval_paths = render_eval_paths
 
-        self.qf_criterion = nn.MSELoss(reduce=False)
-        self.vf_criterion = nn.MSELoss(reduce=False)
+        self.qf_criterion = nn.MSELoss(reduction="none")
+        self.vf_criterion = nn.MSELoss(reduction="none")
         
         self.policy_optimizer, self.qf1_optimizer, self.qf2_optimizer, = [], [], []
         
@@ -326,7 +326,68 @@ class DSunriseTrainer(TorchTrainer):
 
     def end_epoch(self, epoch):
         self._need_to_update_eval_statistics = True
-    
+
+    def train_single_policy(self, batch, policy_idx):
+
+        rewards = batch['rewards']
+        terminals = batch['terminals']
+        obs = batch['observations']
+        actions = batch['actions']
+        next_obs = batch['next_observations']
+        masks = batch['masks']
+        
+        mask = masks[:,policy_idx].reshape(-1, 1)
+        
+        std_Q_actor_list = self.corrective_feedback(obs=obs, update_type=0)
+
+        new_obs_actions, policy_mean, policy_log_std, log_pi, *_ = self.ensemble.get_policies()[policy_idx](
+            obs, reparameterize=True, return_log_prob=True,
+        )
+        if self.use_automatic_entropy_tuning:
+            alpha_loss = -(self.log_alpha[policy_idx] * (log_pi + self.target_entropy).detach())
+            alpha_loss = alpha_loss.sum() / (mask.shape[0]+1)
+            self.alpha_optimizer[policy_idx].zero_grad()
+            alpha_loss.backward()
+            self.alpha_optimizer[policy_idx].step()
+            alpha = self.log_alpha[policy_idx].exp()
+        else:
+            alpha_loss = 0
+            alpha = 1
+
+        q_new_actions = torch.min(
+            self.ensemble.get_critic1s()[policy_idx](obs, new_obs_actions),
+            self.ensemble.get_critic2s()[policy_idx](obs, new_obs_actions),
+        )
+        
+        if self.feedback_type == 0 or self.feedback_type == 2:
+            std_Q = std_Q_actor_list[policy_idx]
+        else:
+            std_Q = std_Q_actor_list[0]
+            
+        if self.feedback_type == 1 or self.feedback_type == 0:
+            weight_actor_Q = torch.sigmoid(-std_Q*self.temperature_act) + 0.5
+        else:
+            weight_actor_Q = 2*torch.sigmoid(-std_Q*self.temperature_act)
+        policy_loss = (alpha*log_pi - q_new_actions - self.expl_gamma * std_Q) * weight_actor_Q.detach()
+        policy_loss = policy_loss.sum() / (mask.shape[0]+1)
+
+        self.policy_optimizer[policy_idx].zero_grad()
+        policy_loss.backward()
+        self.policy_optimizer[policy_idx].step()
+
+    def remove_policy(self, removed_policy):
+        """
+        When a policy is removed from the ensemble the trainer needs to be updated to remove the corresponding
+        elements from the replay buffer and any other relevant data structures.
+        """
+        
+        del self.policy_optimizer[removed_policy]
+        del self.qf1_optimizer[removed_policy]
+        del self.qf2_optimizer[removed_policy]
+        del self.log_alpha[removed_policy]
+        del self.alpha_optimizer[removed_policy]
+        
+
     @property
     def networks(self):
         output = []

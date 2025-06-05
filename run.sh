@@ -32,7 +32,10 @@ echo " Running ${selected_env} with seed ${seed}"
 
 training_script=OpenAIGym_SAC/examples/dsunrise.py
 
+# Pass on any arbitarary kwargs to the training script
+
+
 echo "==Running ${training_script}=="
 
-poetry run python ${training_script} --seed=${seed} --exp-dir="$exp_dir" --env=${selected_env} --exp-name="${exp_name}" "${@:3}" > "$log_file" 2>&1 &
+poetry run python ${training_script} --seed=${seed} --exp_dir="$exp_dir" --env=${selected_env} --exp_name="${exp_name}" "${@:2}" > "$log_file" 2>&1 &
 echo "==${training_script} submitted and running as name ${exp_name} with PID ${!}=="

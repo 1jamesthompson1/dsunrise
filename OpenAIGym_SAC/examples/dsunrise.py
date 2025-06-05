@@ -15,9 +15,10 @@ from rlkit.samplers.data_collector import DynamicEnsembleMdpPathCollector
 from rlkit.torch.sac.policies import TanhGaussianPolicy, MakeDeterministic
 from rlkit.torch.sac.dsunrise import DSunriseTrainer
 from rlkit.torch.networks import FlattenMlp
-from rlkit.torch.torch_rl_algorithm import TorchBatchRLAlgorithm
+from rlkit.torch.torch_rl_algorithm import DynamicTorchBatchRLAlgorithm
 
 import gymnasium as gym
+import numpy as np
 
 def parse_args():
     parser = argparse.ArgumentParser()
@@ -32,15 +33,15 @@ def parse_args():
 
     # misc
     parser.add_argument('--seed', default=1, type=int)
-    parser.add_argument('--exp-dir', default='data', type=str)
-    parser.add_argument('--exp-name', default='experiment', type=str)
-    parser.add_argument('--max-cpu', default=4, type=int)
+    parser.add_argument('--exp_dir', default='data', type=str)
+    parser.add_argument('--exp_name', default='experiment', type=str)
+    parser.add_argument('--max_cpu', default=4, type=int)
 
     # env
     parser.add_argument('--env', default="Ant-v5", type=str)
     
     # ensemble
-    parser.add_argument('--num_ensemble', default=3, type=int)
+    parser.add_argument('--num_ensemble', default=10, type=int)
     parser.add_argument('--ber_mean', default=0.5, type=float)
     
     # inference
@@ -48,6 +49,16 @@ def parse_args():
     
     # corrective feedback
     parser.add_argument('--temperature', default=20.0, type=float)
+
+    # Dynamic management
+    parser.add_argument('--diversity_threshold', default=0.6, type=float)
+    parser.add_argument('--diversity_critical_threshold', default=0.2, type=float)
+    parser.add_argument('--performance_gamma', default=0.95, type=float)
+    parser.add_argument('--window_size', default=1000, type=float)
+    parser.add_argument('--noise', default=0.01, type=float)
+    parser.add_argument('--retrain_steps', default=0, type=float)
+
+    parser.add_argument('--removal_check_frequency', default=10000, type=int)
     
     args = parser.parse_args()
     return args
@@ -55,11 +66,31 @@ def parse_args():
 
 
 class Ensemble:
-    def __init__(self, starting_size, obs_dim, action_dim, network_structure):
+    def __init__(
+            self,
+            starting_size,
+            obs_dim,
+            action_dim,
+            network_structure,
+            # Hyperparameters for removal and instantiation
+            diversity_threshold,
+            diversity_critical_threshold,
+            performance_gamma,
+            window_size,
+            noise,
+            retrain_steps,
+        ):
+
+        self.diversity_threshold = diversity_threshold
+        self.diversity_critical_threshold = diversity_critical_threshold
+        self.performance_gamma = performance_gamma
+        self.window_size = window_size
+        self.noise = noise
+        self.retrain_steps = retrain_steps
 
         self.L_qf1, self.L_qf2, self.L_target_qf1, self.L_target_qf2, self.L_policy, self.L_eval_policy = [], [], [], [], [], []
 
-        for _ in range(starting_size):
+        for idx in range(starting_size):
 
             qf1 = FlattenMlp(
                 input_size=obs_dim + action_dim,
@@ -85,6 +116,7 @@ class Ensemble:
                 obs_dim=obs_dim,
                 action_dim=action_dim,
                 hidden_sizes=network_structure,
+                id = idx
             )
             eval_policy = MakeDeterministic(policy)
             
@@ -115,8 +147,137 @@ class Ensemble:
     def get_target_critic2s(self):
         return self.L_target_qf2
 
-    
+    def compute_performance(self, returns) -> float:
+        """
+        Compute the performance metric for each learner in the ensemble.
+        Args:
+            returns: np.arrays, of shape (num_episodes,), one per policy
+        Returns:
+            performance: float, the computed performance metric for the last window_size episodes
+        """
+        if len(returns) < self.window_size:
+            print(f"Not enough returns to compute performance, expected {self.window_size}, got {len(returns)}")
+            return 1.0
 
+        weights = np.array([self.performance_gamma ** (self.window_size - 1 - i) for i in range(self.window_size)])
+        weights /= weights.sum()
+        performance = np.dot(returns[-self.window_size:].squeeze(), weights)
+        return performance
+
+    def compute_diversity(self, policy_actions, learner_idx):
+        """
+        Computes the diversity of the learner_idx-th policy in the ensemble.
+        Returns the minimum L2 distance to any other policy
+
+        Args:
+            policy_actions: list of np.arrays, each of shape (num_states, action_dim), one per policy
+            learner_idx: index of the learner to compute diversity for
+
+        Returns:
+            min_diversity: float, minimum average L2 distance to another policy
+        """
+        num_learners = len(policy_actions)
+        a_i = policy_actions[learner_idx]  # shape: (num_states, action_dim)
+
+        min_diversity = float('inf')
+
+        for j in range(num_learners):
+            if j == learner_idx:
+                continue
+            a_j = policy_actions[j]
+            # Compute mean L2 distance over all states
+            dists = np.linalg.norm(a_i - a_j, axis=1)  # shape: (num_states,)
+            avg_dist = np.mean(dists)
+            if avg_dist < min_diversity:
+                min_diversity = avg_dist
+
+        return min_diversity
+
+    def removal_check(self, samples, returns):
+        """
+        Check to see if any of the learners are two similar and could be removed
+        """
+
+        policy_actions = []
+        for policy in self.L_eval_policy:
+            actions = []
+            for state in samples:
+                action, _ = policy.get_action(state)
+                actions.append(action)
+            policy_actions.append(np.array(actions))
+
+        performances = [self.compute_performance(returns[i]) for i in range(len(self.L_eval_policy))]
+
+        diversities = [self.compute_diversity(policy_actions, i) for i in range(len(self.L_eval_policy))]
+
+        # Find the lowest policies
+        close_policies = [i for i, div in enumerate(diversities) if div < self.diversity_threshold and div == min(diversities)]
+
+        worst_performaning_policy = sorted([(i, perf) for i, perf in enumerate(performances) if i in close_policies], key=lambda x: x[1], reverse=True)
+
+        # Remove the worst performing policy
+        if len(worst_performaning_policy) == 0:
+            print("No polices to replace")
+            return None
+        if len(worst_performaning_policy) > 0:
+            print(f"Worst performing policy is {worst_performaning_policy[0][0]} with performance {worst_performaning_policy[0][1]} and diversity {diversities[worst_performaning_policy[0][0]]}")
+
+            return worst_performaning_policy[0][0]
+
+    def replace_policy(self, policy_index, samples, train_function):
+        """
+        Take a policy and replace it with a new one. If it fails a diversity check it wont be added to the ensemble and instead that sac agent will be removed from the ensemble.
+
+        The replacement of a new policy is a as follows
+
+        Firstly apply gaussian noise to the policy parameters.
+
+        Secondly retrain on a set of transitions for a certain number of steps
+        """
+
+        with torch.no_grad():
+            for param in self.L_policy[policy_index].parameters():
+                noise = torch.randn_like(param) * self.noise
+                param.add_(noise)
+
+        for _ in range(self.retrain_steps):
+            train_function(self.L_policy[policy_index])
+
+        
+        policy_actions = []
+        for policy in self.L_eval_policy:
+            actions = []
+            for state in samples:
+                action, _ = policy.get_action(state)
+                actions.append(action)
+            policy_actions.append(actions)
+
+        div = self.compute_diversity(policy_actions, policy_index)
+
+        if div < self.diversity_critical_threshold:
+            print(f"Policy {policy_index} after mutation and retraining has a diversity of {div} which is below the threshold {self.diversity_critical_threshold}")
+            self.remove_policy(policy_index)
+
+            return policy_index
+        else:
+            return None
+
+    def remove_policy(self, policy_index):
+        """
+        Remove the policy at the given index from the ensemble.
+        Args:
+            policy_index: index of the policy to remove
+        """
+        print(f"Removing policy {policy_index}")
+        del self.L_qf1[policy_index]
+        del self.L_qf2[policy_index]
+        del self.L_target_qf1[policy_index]
+        del self.L_target_qf2[policy_index]
+        del self.L_policy[policy_index]
+        del self.L_eval_policy[policy_index]
+
+        for i, policy in enumerate(self.L_policy):
+            policy.id = i
 
 def experiment(variant):
     expl_env = NormalizedBoxEnv(gym.make(variant['env']))
@@ -128,8 +289,19 @@ def experiment(variant):
     num_layer = variant['num_layer']
     network_structure = [M] * num_layer
     
-    ensemble = Ensemble(variant['num_ensemble'], obs_dim, action_dim, network_structure)
-    
+    ensemble = Ensemble(
+        variant['num_ensemble'],
+        obs_dim,
+        action_dim,
+        network_structure,
+        variant['diversity_threshold'],
+        variant['diversity_critical_threshold'],
+        variant['performance_gamma'],
+        variant['window_size'],
+        variant['noise'],
+        variant['retrain_steps']
+    )
+
     eval_path_collector = DynamicEnsembleMdpPathCollector(
         eval_env,
         ensemble,
@@ -162,8 +334,9 @@ def experiment(variant):
         log_dir=variant['log_dir'],
         **variant['trainer_kwargs']
     )
-    algorithm = TorchBatchRLAlgorithm(
+    algorithm = DynamicTorchBatchRLAlgorithm(
         trainer=trainer,
+        ensemble=ensemble,
         exploration_env=expl_env,
         evaluation_env=eval_env,
         exploration_data_collector=expl_path_collector,
@@ -194,6 +367,7 @@ if __name__ == "__main__":
             max_path_length=1000,
             batch_size=args.batch_size,
             save_frequency=args.save_freq,
+            removal_check_frequency=args.removal_check_frequency,
         ),
         trainer_kwargs=dict(
             discount=0.99,
@@ -211,6 +385,12 @@ if __name__ == "__main__":
         env=args.env,
         inference_type=args.inference_type,
         temperature=args.temperature,
+        diversity_threshold = args.diversity_threshold,
+        diversity_critical_threshold = args.diversity_critical_threshold,
+        performance_gamma = args.performance_gamma,
+        window_size = args.window_size,
+        noise = args.noise,
+        retrain_steps = args.retrain_steps,
     )
 
     torch.set_num_threads(args.max_cpu)

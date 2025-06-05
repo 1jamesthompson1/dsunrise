@@ -36,6 +36,7 @@ class TanhGaussianPolicy(Mlp, ExplorationPolicy):
             obs_dim,
             action_dim,
             std=None,
+            id=None,
             init_w=1e-3,
             **kwargs
     ):
@@ -46,6 +47,7 @@ class TanhGaussianPolicy(Mlp, ExplorationPolicy):
             init_w=init_w,
             **kwargs
         )
+        self.id = id
         self.log_std = None
         self.std = std
         if std is None:
@@ -61,7 +63,7 @@ class TanhGaussianPolicy(Mlp, ExplorationPolicy):
 
     def get_action(self, obs_np, deterministic=False):
         actions = self.get_actions(obs_np[None], deterministic=deterministic)
-        return actions[0, :], {}
+        return actions[0, :], {"policy_id": self.id}
 
     def get_actions(self, obs_np, deterministic=False):
         return eval_np(self, obs_np, deterministic=deterministic)[0]

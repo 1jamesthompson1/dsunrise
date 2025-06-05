@@ -4,6 +4,7 @@ from rlkit.data_management.simple_replay_buffer import SimpleReplayBuffer, Ensem
 from rlkit.data_management.simple_replay_buffer import RandomReplayBuffer, GaussianReplayBuffer
 from rlkit.envs.env_utils import get_dim
 import numpy as np
+from collections import deque
 
 
 class EnvReplayBuffer(SimpleReplayBuffer):
@@ -82,8 +83,7 @@ class EnsembleEnvReplayBuffer(EnsembleSimpleReplayBuffer):
             log_dir=log_dir,
         )
 
-    def add_sample(self, observation, action, reward, terminal,
-                   next_observation, mask, **kwargs):
+    def add_sample(self, observation, action, reward, terminal, next_observation, mask, **kwargs):
         if isinstance(self._action_space, Discrete):
             new_action = np.zeros(self._action_dim)
             new_action[action] = 1
@@ -120,18 +120,36 @@ class DynamicEnsembleEnvReplayBuffer(EnsembleEnvReplayBuffer):
             env_info_sizes=env_info_sizes
         )
 
+        self.policy_rewards = [deque(maxlen=max_replay_buffer_size) for _ in range(num_ensemble)]
+    
+    def add_sample(self, observation, action, reward, terminal, next_observation, mask, agent_info, **kwargs):
+        super().add_sample(observation, action, reward, terminal, next_observation, mask, agent_infos=agent_info, **kwargs)
+        self.policy_rewards[agent_info["policy_id"]].append(reward)
+
     def update_mask(self, actor, mask):
         """
         Update the mask for a particular action. I.e just update a column
         """
         self._mask[:, actor] = mask
     
-    def remove_actor(self, actor):
+    def refresh_policy_rewards(self, policy):
         """
-        Remove a actor from the mask. I.e remove the column from the mask
+        Refresh the rewards for a particular policy. I.e reset the deque
         """
-        self._mask = np.delete(self._mask, actor, axis=1)
+        self.policy_rewards[policy] = deque(maxlen=self._max_replay_buffer_size)
+    
+    def remove_policy(self, policy_idx):
+        """
+        Remove a policy from the mask. I.e remove the column from the mask
+        """
+        self._mask = np.delete(self._mask, policy_idx, axis=1)
+        del self.policy_rewards[policy_idx]
 
+    def get_policy_historic_performance(self):
+        """
+        Get the historic performance of a policy
+        """
+        return [np.array(policy_rewards) for policy_rewards in self.policy_rewards]
     
 class RandomEnvReplayBuffer(RandomReplayBuffer):
     def __init__(
