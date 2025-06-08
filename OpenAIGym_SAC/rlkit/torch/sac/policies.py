@@ -133,3 +133,8 @@ class MakeDeterministic(nn.Module, Policy):
     def get_action(self, observation):
         return self.stochastic_policy.get_action(observation,
                                                  deterministic=True)
+
+    def get_actions(self, observations):
+        return self.stochastic_policy.get_actions(
+            observations, deterministic=True
+        )

@@ -4,6 +4,7 @@ from collections import OrderedDict
 from typing import Iterable
 from torch import nn as nn
 import torch
+import time
 from functools import partial
 
 from rlkit.core.batch_rl_algorithm import BatchRLAlgorithm
@@ -12,6 +13,7 @@ from rlkit.core.online_rl_algorithm import OnlineRLAlgorithm
 from rlkit.core.trainer import Trainer
 from rlkit.torch.core import np_to_pytorch_batch
 
+from rlkit.core import logger
 
 class TorchOnlineRLAlgorithm(OnlineRLAlgorithm):
     def to(self, device):
@@ -45,27 +47,48 @@ class DynamicTorchBatchRLAlgorithm(TorchBatchRLAlgorithm):
 
         # Perform removal check
 
+        if len(self.ensemble) == 1:
+            print("== Only one policy in the ensemble, skipping removal check ==")
+            return
+
+        removal_check_start_time = time.time()
+
         if self.replay_buffer.num_steps_can_sample() % self.removal_check_frequency == 0:
             sample = self.replay_buffer.random_batch(2000)["observations"]
             returns = self.replay_buffer.get_policy_historic_performance()
             # Get the actions form the polices for all the observations in the sample
 
-            removal_check_results = self.ensemble.removal_check(sample, returns)
+            removal_check_results, debug = self.ensemble.removal_check(sample, returns)
+
+            print(f"== Removal check results: {removal_check_results} ==")
+
+            debug["policy_to_remove"] = removal_check_results
 
             if removal_check_results is not None:
                 # Replace the worst performing policy
-                removed_policy = self.ensemble.replace_policy(removal_check_results, partial(self.trainer.train_single_policy, batch = np_to_pytorch_batch(self.replay_buffer.random_batch(256*8))))
+                removed_policy, div = self.ensemble.replace_policy(
+                    removal_check_results,
+                    sample,
+                    self.trainer.train_single_policy,
+                    partial(lambda: np_to_pytorch_batch(self.replay_buffer.random_batch(self.batch_size)))
+                )
+                debug["replaced_policy_diversity"] = div
 
                 if removed_policy is not None:
                     self.replay_buffer.remove_policy(removed_policy)
                     self.trainer.remove_policy(removed_policy)
-                    print(f"Removed policy {removed_policy} from the ensemble")
+                    debug["removing_result"] = "removed"
                 else:
-                    print(f"Policy {removal_check_results} was not removed and was replaced with a mutated and retrained policy")
-
+                    debug["removing_result"] = "replaced"
                     self.replay_buffer.refresh_policy_rewards(removal_check_results)
 
                     self.replay_buffer.update_mask(removed_policy=removed_policy, mask=torch.bernoulli(torch.tensor([0.5] * self.replay_buffer._max_replay_buffer)))
+                    
+
+            debug["removal_check_time"] = time.time() - removal_check_start_time
+
+            print(debug, flush=True)
+
 
 
 class TorchBatchNormalRLAlgorithm(BatchNormalRLAlgorithm):

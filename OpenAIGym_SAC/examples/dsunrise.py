@@ -29,7 +29,7 @@ def parse_args():
     parser.add_argument('--batch_size', default=256, type=int)
     parser.add_argument('--save_freq', default=0, type=int)
     parser.add_argument('--computation_device', default='cpu', type=str)
-    parser.add_argument('--epochs', default=210, type=int)
+    parser.add_argument('--epochs', default=1000, type=int)
 
     # misc
     parser.add_argument('--seed', default=1, type=int)
@@ -51,12 +51,12 @@ def parse_args():
     parser.add_argument('--temperature', default=20.0, type=float)
 
     # Dynamic management
-    parser.add_argument('--diversity_threshold', default=0.6, type=float)
-    parser.add_argument('--diversity_critical_threshold', default=0.2, type=float)
+    parser.add_argument('--diversity_threshold', default=0.005, type=float)
+    parser.add_argument('--diversity_critical_threshold', default=0.001, type=float)
     parser.add_argument('--performance_gamma', default=0.95, type=float)
     parser.add_argument('--window_size', default=1000, type=float)
     parser.add_argument('--noise', default=0.01, type=float)
-    parser.add_argument('--retrain_steps', default=0, type=float)
+    parser.add_argument('--retrain_steps', default=0, type=int)
 
     parser.add_argument('--removal_check_frequency', default=10000, type=int)
     
@@ -167,64 +167,51 @@ class Ensemble:
     def compute_diversity(self, policy_actions, learner_idx):
         """
         Computes the diversity of the learner_idx-th policy in the ensemble.
-        Returns the minimum L2 distance to any other policy
+        Returns a measure from 0 to 1 indicating how similar the actions of two policies are.
 
         Args:
             policy_actions: list of np.arrays, each of shape (num_states, action_dim), one per policy
             learner_idx: index of the learner to compute diversity for
 
         Returns:
-            min_diversity: float, minimum average L2 distance to another policy
+            max_diversity: float, maximum diversity (1 - normalized L2 distance) to another policy
         """
-        num_learners = len(policy_actions)
         a_i = policy_actions[learner_idx]  # shape: (num_states, action_dim)
 
-        min_diversity = float('inf')
+        diversities = [
+            (np.mean(np.linalg.norm(a_i - a_j, axis=1)) / np.linalg.norm(np.ones_like(a_i)))  # Normalize by max possible L2 distance
+            for j, a_j in enumerate(policy_actions)
+            if j != learner_idx
+        ]
 
-        for j in range(num_learners):
-            if j == learner_idx:
-                continue
-            a_j = policy_actions[j]
-            # Compute mean L2 distance over all states
-            dists = np.linalg.norm(a_i - a_j, axis=1)  # shape: (num_states,)
-            avg_dist = np.mean(dists)
-            if avg_dist < min_diversity:
-                min_diversity = avg_dist
-
-        return min_diversity
+        return np.min(diversities)
 
     def removal_check(self, samples, returns):
         """
-        Check to see if any of the learners are two similar and could be removed
+        Check to see if any of the learners are too similar and could be removed.
         """
 
-        policy_actions = []
-        for policy in self.L_eval_policy:
-            actions = []
-            for state in samples:
-                action, _ = policy.get_action(state)
-                actions.append(action)
-            policy_actions.append(np.array(actions))
+        policy_actions = [
+            policy.get_actions(samples)  # Use batch processing to get actions
+            for policy in self.L_eval_policy
+        ]
 
         performances = [self.compute_performance(returns[i]) for i in range(len(self.L_eval_policy))]
 
         diversities = [self.compute_diversity(policy_actions, i) for i in range(len(self.L_eval_policy))]
 
-        # Find the lowest policies
+        # Find policies with low diversity
         close_policies = [i for i, div in enumerate(diversities) if div < self.diversity_threshold and div == min(diversities)]
 
         worst_performaning_policy = sorted([(i, perf) for i, perf in enumerate(performances) if i in close_policies], key=lambda x: x[1], reverse=True)
 
         # Remove the worst performing policy
         if len(worst_performaning_policy) == 0:
-            print("No polices to replace")
-            return None
+            return None, {"performances": performances, "diversities": diversities}
         if len(worst_performaning_policy) > 0:
-            print(f"Worst performing policy is {worst_performaning_policy[0][0]} with performance {worst_performaning_policy[0][1]} and diversity {diversities[worst_performaning_policy[0][0]]}")
+            return worst_performaning_policy[0][0], {"performances": performances, "diversities": diversities}
 
-            return worst_performaning_policy[0][0]
-
-    def replace_policy(self, policy_index, samples, train_function):
+    def replace_policy(self, policy_index, samples, train_function, sampler):
         """
         Take a policy and replace it with a new one. If it fails a diversity check it wont be added to the ensemble and instead that sac agent will be removed from the ensemble.
 
@@ -241,16 +228,13 @@ class Ensemble:
                 param.add_(noise)
 
         for _ in range(self.retrain_steps):
-            train_function(self.L_policy[policy_index])
+            train_function(sampler(), policy_index)
 
         
-        policy_actions = []
-        for policy in self.L_eval_policy:
-            actions = []
-            for state in samples:
-                action, _ = policy.get_action(state)
-                actions.append(action)
-            policy_actions.append(actions)
+        policy_actions = [
+            policy.get_actions(samples)  # Use batch processing to get actions
+            for policy in self.L_eval_policy
+        ]
 
         div = self.compute_diversity(policy_actions, policy_index)
 
@@ -258,9 +242,9 @@ class Ensemble:
             print(f"Policy {policy_index} after mutation and retraining has a diversity of {div} which is below the threshold {self.diversity_critical_threshold}")
             self.remove_policy(policy_index)
 
-            return policy_index
+            return policy_index, div
         else:
-            return None
+            return None, div
 
     def remove_policy(self, policy_index):
         """
@@ -278,6 +262,7 @@ class Ensemble:
 
         for i, policy in enumerate(self.L_policy):
             policy.id = i
+
 
 def experiment(variant):
     expl_env = NormalizedBoxEnv(gym.make(variant['env']))
