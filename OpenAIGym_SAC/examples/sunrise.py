@@ -7,16 +7,16 @@ sys.path.append(str(Path(__file__).resolve().parent.parent))
 import argparse
 import rlkit.torch.pytorch_util as ptu
 
-from rlkit.data_management.env_replay_buffer import EnsembleEnvReplayBuffer
+from rlkit.data_management.env_replay_buffer import DynamicEnsembleEnvReplayBuffer
 from rlkit.envs.wrappers import NormalizedBoxEnv
 from rlkit.launchers.launcher_util import setup_logger_custom, set_seed
 from rlkit.samplers.data_collector import EnsembleMdpPathCollector
-from rlkit.torch.sac.policies import TanhGaussianPolicy, MakeDeterministic
 from rlkit.torch.sac.neurips20_sac_ensemble import NeurIPS20SACEnsembleTrainer
-from rlkit.torch.networks import FlattenMlp
-from rlkit.torch.torch_rl_algorithm import TorchBatchRLAlgorithm
+from rlkit.torch.torch_rl_algorithm import DynamicTorchBatchRLAlgorithm
 
 import gymnasium as gym
+
+from examples.sunrise_ensemble import Ensemble
 
 def parse_args():
     parser = argparse.ArgumentParser()
@@ -31,7 +31,8 @@ def parse_args():
 
     # misc
     parser.add_argument('--seed', default=1, type=int)
-    parser.add_argument('--log_dir', default='data', type=str)
+    parser.add_argument('--exp_dir', default='data', type=str)
+    parser.add_argument('--exp_name', default='experiment', type=str)
     
     # env
     parser.add_argument('--env', default="Ant-v5", type=str)
@@ -45,6 +46,8 @@ def parse_args():
     
     # corrective feedback
     parser.add_argument('--temperature', default=20.0, type=float)
+    parser.add_argument('--removal_check_buffer_size', default=2000, type=int)
+    parser.add_argument('--removal_check_frequency', default=10000, type=int)
     
     args = parser.parse_args()
     return args
@@ -61,64 +64,42 @@ def experiment(variant):
     network_structure = [M] * num_layer
     
     NUM_ENSEMBLE = variant['num_ensemble']
-    L_qf1, L_qf2, L_target_qf1, L_target_qf2, L_policy, L_eval_policy = [], [], [], [], [], []
-    
-    for _ in range(NUM_ENSEMBLE):
-    
-        qf1 = FlattenMlp(
-            input_size=obs_dim + action_dim,
-            output_size=1,
-            hidden_sizes=network_structure,
-        )
-        qf2 = FlattenMlp(
-            input_size=obs_dim + action_dim,
-            output_size=1,
-            hidden_sizes=network_structure,
-        )
-        target_qf1 = FlattenMlp(
-            input_size=obs_dim + action_dim,
-            output_size=1,
-            hidden_sizes=network_structure,
-        )
-        target_qf2 = FlattenMlp(
-            input_size=obs_dim + action_dim,
-            output_size=1,
-            hidden_sizes=network_structure,
-        )
-        policy = TanhGaussianPolicy(
-            obs_dim=obs_dim,
-            action_dim=action_dim,
-            hidden_sizes=network_structure,
-        )
-        eval_policy = MakeDeterministic(policy)
-        
-        L_qf1.append(qf1)
-        L_qf2.append(qf2)
-        L_target_qf1.append(target_qf1)
-        L_target_qf2.append(target_qf2)
-        L_policy.append(policy)
-        L_eval_policy.append(eval_policy)
+
+    ensemble = Ensemble(
+        NUM_ENSEMBLE,
+        obs_dim,
+        action_dim,
+        network_structure,
+        # These parameters are not used but just added to allow it to run.
+        diversity_threshold=variant.get('diversity_threshold', 0.006),
+        diversity_critical_threshold=variant.get('diversity_critical_threshold', 0.005),
+        performance_gamma=variant.get('performance_gamma', 0.95),
+        window_size=variant.get('window_size', 1000),
+        noise=variant.get('noise', 0.1),
+        retrain_steps=variant.get('retrain_steps', 0),
+    )
     
     eval_path_collector = EnsembleMdpPathCollector(
         eval_env,
-        L_eval_policy,
+        ensemble.get_eval_policies(),
         NUM_ENSEMBLE,
         eval_flag=True,
     )
     
     expl_path_collector = EnsembleMdpPathCollector(
         expl_env,
-        L_policy,
+        ensemble.get_policies(),
         NUM_ENSEMBLE,
         ber_mean=variant['ber_mean'],
         eval_flag=False,
-        critic1=L_qf1,
-        critic2=L_qf2,
+        critic1=ensemble.get_critic1s(),
+        critic2=ensemble.get_critic2s(),
         inference_type=variant['inference_type'],
         feedback_type=1,
     )
     
-    replay_buffer = EnsembleEnvReplayBuffer(
+    # Have to switch over to the newer dynamic version to allow for the get historic performance functions.
+    replay_buffer = DynamicEnsembleEnvReplayBuffer(
         variant['replay_buffer_size'],
         expl_env,
         NUM_ENSEMBLE,
@@ -127,11 +108,11 @@ def experiment(variant):
     
     trainer = NeurIPS20SACEnsembleTrainer(
         env=eval_env,
-        policy=L_policy,
-        qf1=L_qf1,
-        qf2=L_qf2,
-        target_qf1=L_target_qf1,
-        target_qf2=L_target_qf2,
+        policy=ensemble.get_policies(),
+        qf1=ensemble.get_critic1s(),
+        qf2=ensemble.get_critic2s(),
+        target_qf1=ensemble.get_target_critic1s(),
+        target_qf2=ensemble.get_target_critic2s(),
         num_ensemble=NUM_ENSEMBLE,
         feedback_type=1,
         temperature=variant['temperature'],
@@ -140,13 +121,16 @@ def experiment(variant):
         log_dir=variant['log_dir'],
         **variant['trainer_kwargs']
     )
-    algorithm = TorchBatchRLAlgorithm(
+    algorithm = DynamicTorchBatchRLAlgorithm(
         trainer=trainer,
         exploration_env=expl_env,
         evaluation_env=eval_env,
         exploration_data_collector=expl_path_collector,
         evaluation_data_collector=eval_path_collector,
         replay_buffer=replay_buffer,
+        # Extra arguments to allow for diversity checking throughout the learning process
+        ensemble=ensemble,
+        always_dryrun=True,
         **variant['algorithm_kwargs']
     )
     
@@ -172,6 +156,8 @@ if __name__ == "__main__":
             max_path_length=1000,
             batch_size=args.batch_size,
             save_frequency=args.save_freq,
+            removal_check_frequency=args.removal_check_frequency,
+            removal_check_buffer_size=args.removal_check_buffer_size
         ),
         trainer_kwargs=dict(
             discount=0.99,
@@ -192,8 +178,8 @@ if __name__ == "__main__":
     )
                             
     set_seed(args.seed)
-    exp_name = 'SUNRISE'
-    log_dir = setup_logger_custom(exp_name, log_dir=args.log_dir, variant=variant)
+    exp_name = args.exp_name
+    log_dir = setup_logger_custom(exp_name, log_dir=args.exp_dir, variant=variant)
 
     variant['log_dir'] = log_dir
     if 'cuda' in args.computation_device:

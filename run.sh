@@ -6,8 +6,8 @@
 OUTPUTDIR=experiments
 
 task_id=$(($1-1)) # 0-indexed except that grid system doesnt allow 0 as the task id
+algorithm=$2
 num_seeds=10
-num_algos=3
 num_envs=9
 
 runs_per_algo=$(($num_seeds * $num_envs))
@@ -23,19 +23,20 @@ selected_env=${envs[$env_index]}
 current_time=$(date +"%y-%m-%d_%H-%M-%S")
 exp_name="${selected_env}_${seed}_${current_time}"
 
-exp_dir="${PWD}/${OUTPUTDIR}/${exp_name}"
+exp_dir="${PWD}/${OUTPUTDIR}/${algorithm}/${exp_name}"
 
 mkdir -p "$exp_dir"
 log_file="$exp_dir/logs.txt"
 
 echo " Running ${selected_env} with seed ${seed}"
 
-training_script=OpenAIGym_SAC/examples/dsunrise.py
+
+training_script=OpenAIGym_SAC/examples/$algorithm.py
 
 # Pass on any arbitarary kwargs to the training script
 
 
 echo "==Running ${training_script}=="
 
-poetry run python ${training_script} --seed=${seed} --exp_dir="$exp_dir" --env=${selected_env} --exp_name="${exp_name}" "${@:2}" > "$log_file" 2>&1 &
+poetry run python ${training_script} --seed=${seed} --exp_dir="$exp_dir" --env=${selected_env} --exp_name="${exp_name}" "${@:3}" > "$log_file" 2>&1 &
 echo "==${training_script} submitted and running as name ${exp_name} with PID ${!}=="

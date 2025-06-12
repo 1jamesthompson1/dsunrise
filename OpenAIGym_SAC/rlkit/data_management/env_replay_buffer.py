@@ -130,6 +130,10 @@ class DynamicEnsembleEnvReplayBuffer(EnsembleEnvReplayBuffer):
         """
         Update the mask for a particular action. I.e just update a column
         """
+        print(f"Mask if of shape {self._mask.shape} and actor {actor} has shape {mask.shape}")
+
+        print(f"Selection mask is of shape: {self._mask[:, actor]}")
+
         self._mask[:, actor] = mask
     
     def refresh_policy_rewards(self, policy):

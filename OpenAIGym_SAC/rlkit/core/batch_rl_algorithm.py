@@ -53,6 +53,10 @@ class BatchRLAlgorithm(BaseRLAlgorithm, metaclass=abc.ABCMeta):
             self.replay_buffer.add_paths(init_expl_paths)
             self.expl_data_collector.end_epoch(-1)
 
+        # Check if it has a removal check function
+        if hasattr(self, 'perform_removal_checks'):
+            self.perform_removal_checks(dry_run=True)
+
         for epoch in gt.timed_for(
                 range(self._start_epoch, self.num_epochs),
                 save_itrs=True,
