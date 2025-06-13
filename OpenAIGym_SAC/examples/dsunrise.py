@@ -15,6 +15,9 @@ from rlkit.samplers.data_collector import DynamicEnsembleMdpPathCollector
 from rlkit.torch.sac.dsunrise import DSunriseTrainer
 from rlkit.torch.torch_rl_algorithm import DynamicTorchBatchRLAlgorithm
 
+import os
+import torch.multiprocessing as mp
+
 import gymnasium as gym
 
 from examples.sunrise_ensemble import Ensemble
@@ -28,13 +31,13 @@ def parse_args():
     parser.add_argument('--batch_size', default=256, type=int)
     parser.add_argument('--save_freq', default=0, type=int)
     parser.add_argument('--computation_device', default='cpu', type=str)
-    parser.add_argument('--epochs', default=1000, type=int)
+    parser.add_argument('--epochs', default=1, type=int)
 
     # misc
     parser.add_argument('--seed', default=1, type=int)
     parser.add_argument('--exp_dir', default='data', type=str)
     parser.add_argument('--exp_name', default='experiment', type=str)
-    parser.add_argument('--max_cpu', default=4, type=int)
+    parser.add_argument('--max_cpu', default=8, type=int)
 
     # env
     parser.add_argument('--env', default="Ant-v5", type=str)
@@ -44,7 +47,7 @@ def parse_args():
     parser.add_argument('--ber_mean', default=0.5, type=float)
     
     # inference
-    parser.add_argument('--inference_type', default=0.0, type=float)
+    parser.add_argument('--inference_type', default=0.0, type=float) # Default to UCB exploration
     
     # corrective feedback
     parser.add_argument('--temperature', default=20.0, type=float)
@@ -56,7 +59,7 @@ def parse_args():
     parser.add_argument('--window_size', default=1000, type=float)
     parser.add_argument('--noise', default=0.1, type=float)
     parser.add_argument('--retrain_steps', default=0, type=int)
-    parser.add_argument('--removal_check_buffer_size', default=2000, type=int)
+    parser.add_argument('--removal_check_buffer_size', default=10000, type=int)
     parser.add_argument('--removal_check_frequency', default=10000, type=int)
     
     args = parser.parse_args()
@@ -179,7 +182,9 @@ if __name__ == "__main__":
         retrain_steps = args.retrain_steps,
     )
 
-    torch.set_num_threads(args.max_cpu)
+    # Set the number of threads to min(args.max_cpu, number of available CPUs)
+    num_available_cpus = os.cpu_count()
+    torch.set_num_threads(min(args.max_cpu, num_available_cpus))
 
     set_seed(args.seed)
     log_dir = setup_logger_custom(args.exp_name, log_dir=args.exp_dir, variant=variant)

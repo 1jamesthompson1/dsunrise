@@ -1,4 +1,5 @@
 from gymnasium.spaces import Discrete
+import torch
 
 from rlkit.data_management.simple_replay_buffer import SimpleReplayBuffer, EnsembleSimpleReplayBuffer
 from rlkit.data_management.simple_replay_buffer import RandomReplayBuffer, GaussianReplayBuffer
@@ -154,6 +155,21 @@ class DynamicEnsembleEnvReplayBuffer(EnsembleEnvReplayBuffer):
         Get the historic performance of a policy
         """
         return [np.array(policy_rewards) for policy_rewards in self.policy_rewards]
+
+    def save_buffer(self, epoch):
+        super().save_buffer(epoch)
+
+        policy_rewards_path = self.buffer_dir + '/policy_rewards_%d.pt' % (epoch)
+        payload = [np.array(policy_rewards) for policy_rewards in self.policy_rewards]
+        torch.save(payload, policy_rewards_path)
+    
+    def load_buffer(self, epoch):
+        super().load_buffer(epoch)
+
+        policy_rewards_path = self.buffer_dir + '/policy_rewards_%d.pt' % (epoch)
+        payload = torch.load(policy_rewards_path)
+        for i, policy_rewards in enumerate(payload):
+            self.policy_rewards[i] = deque(policy_rewards, maxlen=self._max_replay_buffer_size)
     
 class RandomEnvReplayBuffer(RandomReplayBuffer):
     def __init__(

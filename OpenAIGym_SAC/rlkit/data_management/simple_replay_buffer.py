@@ -1,5 +1,6 @@
 from collections import OrderedDict
 
+import os
 import numpy as np
 import torch
 
@@ -131,6 +132,7 @@ class EnsembleSimpleReplayBuffer(EnsembleReplayBuffer):
         self._top = 0
         self._size = 0
         self.buffer_dir = log_dir + '/buffer/'
+        os.makedirs(self.buffer_dir, exist_ok=True)
 
     def add_sample(self, observation, action, reward, next_observation,
                    terminal, mask, env_info, **kwargs):

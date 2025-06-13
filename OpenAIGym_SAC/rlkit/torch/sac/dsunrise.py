@@ -4,6 +4,7 @@ import numpy as np
 import torch
 import torch.optim as optim
 from torch import nn as nn
+import os
 
 import rlkit.torch.pytorch_util as ptu
 from rlkit.core.eval_util import create_stats_ordered_dict
@@ -48,6 +49,8 @@ class DSunriseTrainer(TorchTrainer):
         self.temperature_act = temperature_act
         self.expl_gamma = expl_gamma
         self.model_dir = log_dir + '/model/'
+
+        os.makedirs(self.model_dir, exist_ok=True)
         
         self.use_automatic_entropy_tuning = use_automatic_entropy_tuning
         
