@@ -7,8 +7,8 @@ class Ensemble:
     def __init__(
             self,
             starting_size,
-            obs_dim,
-            action_dim,
+            obs_space,
+            action_space,
             network_structure,
             # Hyperparameters for removal and instantiation
             diversity_threshold,
@@ -25,6 +25,11 @@ class Ensemble:
         self.window_size = window_size
         self.noise = noise
         self.retrain_steps = retrain_steps
+        
+
+        obs_dim = obs_space.shape[0]
+        action_dim = action_space.shape[0]
+        self.max_dist = np.sqrt(np.sum((action_space.high - action_space.low)**2))
 
         self.L_qf1, self.L_qf2, self.L_target_qf1, self.L_target_qf2, self.L_policy, self.L_eval_policy = [], [], [], [], [], []
 
@@ -106,7 +111,7 @@ class Ensemble:
     def compute_diversity(self, policy_actions, learner_idx):
         """
         Computes the diversity of the learner_idx-th policy in the ensemble.
-        Returns a measure from 0 to 1 indicating how similar the actions of two policies are.
+        Returns a measure from 0 to 1 indicating how similar the actions of two policies are. It will find the closest policy and so that diversity is effectively a single linkage calculation.
 
         Args:
             policy_actions: list of np.arrays, each of shape (num_states, action_dim), one per policy
@@ -118,7 +123,7 @@ class Ensemble:
         a_i = policy_actions[learner_idx]  # shape: (num_states, action_dim)
 
         diversities = [
-            (np.mean(np.linalg.norm(a_i - a_j, axis=1)) / np.linalg.norm(np.ones_like(a_i)))  # Normalize by max possible L2 distance
+            (np.mean(np.linalg.norm(a_i - a_j, axis=1)) / self.max_dist)
             for j, a_j in enumerate(policy_actions)
             if j != learner_idx
         ]

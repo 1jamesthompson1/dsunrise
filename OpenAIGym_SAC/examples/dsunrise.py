@@ -29,9 +29,9 @@ def parse_args():
     
     # train
     parser.add_argument('--batch_size', default=256, type=int)
-    parser.add_argument('--save_freq', default=0, type=int)
+    parser.add_argument('--save_freq', default=100, type=int)
     parser.add_argument('--computation_device', default='cpu', type=str)
-    parser.add_argument('--epochs', default=1, type=int)
+    parser.add_argument('--epochs', default=1000, type=int)
 
     # misc
     parser.add_argument('--seed', default=1, type=int)
@@ -53,8 +53,8 @@ def parse_args():
     parser.add_argument('--temperature', default=20.0, type=float)
 
     # Dynamic management
-    parser.add_argument('--diversity_threshold', default=0.006, type=float)
-    parser.add_argument('--diversity_critical_threshold', default=0.005, type=float)
+    parser.add_argument('--diversity_threshold', default=0.2, type=float)
+    parser.add_argument('--diversity_critical_threshold', default=0.1, type=float)
     parser.add_argument('--performance_gamma', default=0.95, type=float)
     parser.add_argument('--window_size', default=1000, type=float)
     parser.add_argument('--noise', default=0.1, type=float)
@@ -69,8 +69,6 @@ def parse_args():
 def experiment(variant):
     expl_env = NormalizedBoxEnv(gym.make(variant['env']))
     eval_env = NormalizedBoxEnv(gym.make(variant['env']))
-    obs_dim = expl_env.observation_space.shape[0]
-    action_dim = eval_env.action_space.shape[0]
     
     M = variant['layer_size']
     num_layer = variant['num_layer']
@@ -78,8 +76,8 @@ def experiment(variant):
     
     ensemble = Ensemble(
         variant['num_ensemble'],
-        obs_dim,
-        action_dim,
+        expl_env.observation_space,
+        expl_env.action_space,
         network_structure,
         variant['diversity_threshold'],
         variant['diversity_critical_threshold'],
