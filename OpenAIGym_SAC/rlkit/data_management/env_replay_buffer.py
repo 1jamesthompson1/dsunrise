@@ -163,14 +163,20 @@ class DynamicEnsembleEnvReplayBuffer(EnsembleEnvReplayBuffer):
         payload = [np.array(policy_rewards) for policy_rewards in self.policy_rewards]
         torch.save(payload, policy_rewards_path)
     
-    def load_buffer(self, epoch):
-        super().load_buffer(epoch)
+    def load_buffer(self, epochs):
+        for epoch in epochs:
+            try:
+                policy_rewards_path = self.buffer_dir + '/policy_rewards_%d.pt' % (epoch)
+                payload = torch.load(policy_rewards_path, weights_only=False)
+                for i, policy_rewards in enumerate(payload):
+                    self.policy_rewards[i] = deque(policy_rewards, maxlen=self._max_replay_buffer_size)
+                super().load_buffer(epoch)
+            except FileNotFoundError:
+                print(f"Policy rewards not found for epoch {epoch}. Skipping loading policy rewards.")
+                continue
+            print(f"Loaded replay buffer for epoch {epoch} from {policy_rewards_path}")
+            break
 
-        policy_rewards_path = self.buffer_dir + '/policy_rewards_%d.pt' % (epoch)
-        payload = torch.load(policy_rewards_path)
-        for i, policy_rewards in enumerate(payload):
-            self.policy_rewards[i] = deque(policy_rewards, maxlen=self._max_replay_buffer_size)
-    
 class RandomEnvReplayBuffer(RandomReplayBuffer):
     def __init__(
             self,

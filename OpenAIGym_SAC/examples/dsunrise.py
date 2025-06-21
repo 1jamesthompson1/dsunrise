@@ -1,6 +1,7 @@
 import sys
 from pathlib import Path
 import torch
+import re
 
 # Add the parent directory of 'examples' (i.e., OpenAIGym_SAC) to sys.path
 sys.path.append(str(Path(__file__).resolve().parent.parent))
@@ -61,6 +62,9 @@ def parse_args():
     parser.add_argument('--retrain_steps', default=0, type=int)
     parser.add_argument('--removal_check_buffer_size', default=10000, type=int)
     parser.add_argument('--removal_check_frequency', default=10000, type=int)
+
+    # Resume management
+    parser.add_argument('--resume_dir', type=str, help='Resume from the last checkpoint in the dir')
     
     args = parser.parse_args()
     return args
@@ -119,6 +123,25 @@ def experiment(variant):
         log_dir=variant['log_dir'],
         **variant['trainer_kwargs']
     )
+
+    if variant['resume_dir']:
+        print(f"Resuming from {variant['resume_dir']}")
+
+        def highest_epoch(files):
+            epoch_numbers = []
+            for file in files:
+                match = re.search(r'_(\d+)\.pt$', file)
+                if match:
+                    epoch_numbers.append(int(match.group(1)))
+
+            # Find the highest epoch number
+            highest_epoch = sorted(epoch_numbers, reverse=True) if epoch_numbers else 0
+            return highest_epoch
+
+        trainer.load_models(highest_epoch(os.listdir(os.path.join(variant['resume_dir'], 'model'))))
+        replay_buffer.load_buffer(highest_epoch(os.listdir(os.path.join(variant['resume_dir'], 'buffer'))))
+
+
     algorithm = DynamicTorchBatchRLAlgorithm(
         trainer=trainer,
         ensemble=ensemble,
@@ -186,8 +209,30 @@ if __name__ == "__main__":
 
     set_seed(args.seed)
     log_dir = setup_logger_custom(args.exp_name, log_dir=args.exp_dir, variant=variant)
-
     variant['log_dir'] = log_dir
+
+    if args.resume_dir is not None:
+
+        if not os.path.exists(args.resume_dir):
+            print(f"Resume directory {args.resume_dir} does not exist. Please check the path.")
+            sys.exit(1)
+
+        # Check to see if there are models that match the experiemnt name, env and seed, regardless of epochs
+        matching_models = [f for f in os.listdir(args.resume_dir) if re.match(rf"{args.env}_{args.seed}", f)]
+
+
+        if matching_models:
+            if len(matching_models) > 1:
+                print(f"Multiple matching models found: {matching_models}.")
+                sys.exit(1)
+            print(f"Loading model from {matching_models[0]}")
+
+            resume_model_dir = os.path.join(args.resume_dir, matching_models[0])
+            variant['resume_dir'] = resume_model_dir
+            variant['log_dir'] = resume_model_dir
+        else:
+            raise FileNotFoundError(f"No matching model found in {args.resume_dir} for experiment {args.exp_name}, env {args.env}, seed {args.seed}.")
+
     if 'cuda' in args.computation_device:
         ptu.set_gpu_mode(True, gpu_id=args.computation_device[0])
     else:

@@ -205,14 +205,23 @@ class EnsembleSimpleReplayBuffer(EnsembleReplayBuffer):
 
     def load_buffer(self, epoch):
         path = self.buffer_dir + '/replay_%d.pt' % (epoch)
-        payload = torch.load(path)
-        self._observations = payload[0]
-        self._actions = payload[1]
-        self._rewards = payload[2]
-        self._terminals = payload[3]
-        self._next_obs = payload[4]
-        self._mask = payload[5]
-        self._size = payload[6]
+        payload = torch.load(path, weights_only=False)
+        size = payload[0].shape[0]
+        # Expand arrays to max_replay_buffer_size, fill with zeros, then copy loaded data
+        self._observations = np.zeros((self._max_replay_buffer_size, self._observation_dim))
+        self._observations[:size] = payload[0]
+        self._actions = np.zeros((self._max_replay_buffer_size, self._action_dim))
+        self._actions[:size] = payload[1]
+        self._rewards = np.zeros((self._max_replay_buffer_size, 1))
+        self._rewards[:size] = payload[2]
+        self._terminals = np.zeros((self._max_replay_buffer_size, 1), dtype='uint8')
+        self._terminals[:size] = payload[3]
+        self._next_obs = np.zeros((self._max_replay_buffer_size, self._observation_dim))
+        self._next_obs[:size] = payload[4]
+        self._mask = np.zeros((self._max_replay_buffer_size, self._mask.shape[1]))
+        self._mask[:size] = payload[5]
+        self._size = size
+        self._top = self._size % self._max_replay_buffer_size
         
 class RandomReplayBuffer(ReplayBuffer):
 

@@ -67,8 +67,8 @@ def experiment(variant):
 
     ensemble = Ensemble(
         NUM_ENSEMBLE,
-        obs_dim,
-        action_dim,
+        expl_env.observation_space,
+        expl_env.action_space,
         network_structure,
         # These parameters are not used but just added to allow it to run.
         diversity_threshold=variant.get('diversity_threshold', 0.006),

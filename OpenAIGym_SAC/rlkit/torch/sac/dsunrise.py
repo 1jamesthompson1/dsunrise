@@ -429,23 +429,31 @@ class DSunriseTrainer(TorchTrainer):
                 self.ensemble.get_target_critic2s()[en_index].state_dict(), '%s/%d_th_2nd_target_critic_%s.pt' % (self.model_dir, en_index, step)
             )
 
-    def load_models(self, step):
-        for en_index in range(len(self.ensemble)):
-            self.ensemble.get_policies()[en_index].load_state_dict(
-                torch.load('%s/%d_th_actor_%s.pt' % (self.model_dir, en_index, step))
-            )
-            self.ensemble.get_critic1s()[en_index].load_state_dict(
-                torch.load('%s/%d_th_1st_critic_%s.pt' % (self.model_dir, en_index, step))
-            )
-            self.ensemble.get_critic2s()[en_index].load_state_dict(
-                torch.load('%s/%d_th_2nd_critic_%s.pt' % (self.model_dir, en_index, step))
-            )
-            self.ensemble.get_target_critic1s()[en_index].load_state_dict(
-                torch.load('%s/%d_th_1st_target_critic_%s.pt' % (self.model_dir, en_index, step))
-            )
-            self.ensemble.get_target_critic2s()[en_index].load_state_dict(
-                torch.load('%s/%d_th_2nd_target_critic_%s.pt' % (self.model_dir, en_index, step))
-            )
+    def load_models(self, steps: list):
+        for step in steps:
+            try:
+                for en_index in range(len(self.ensemble)):
+                    self.ensemble.get_policies()[en_index].load_state_dict(
+                        torch.load('%s/%d_th_actor_%s.pt' % (self.model_dir, en_index, step), weights_only=False)
+                    )
+                    self.ensemble.get_critic1s()[en_index].load_state_dict(
+                        torch.load('%s/%d_th_1st_critic_%s.pt' % (self.model_dir, en_index, step), weights_only=False)
+                    )
+                    self.ensemble.get_critic2s()[en_index].load_state_dict(
+                        torch.load('%s/%d_th_2nd_critic_%s.pt' % (self.model_dir, en_index, step), weights_only=False)
+                    )
+                    self.ensemble.get_target_critic1s()[en_index].load_state_dict(
+                        torch.load('%s/%d_th_1st_target_critic_%s.pt' % (self.model_dir, en_index, step), weights_only=False)
+                    )
+                    self.ensemble.get_target_critic2s()[en_index].load_state_dict(
+                        torch.load('%s/%d_th_2nd_target_critic_%s.pt' % (self.model_dir, en_index, step), weights_only=False)
+                    )
+            except FileNotFoundError as e:
+                print(f"Model files for step {step} not found. Skipping loading for this step.")
+                print(e)
+                continue
+            print(f"Loaded models for step {step} successfully.")
+            break
             
             
     def print_model(self):
